@@ -13,3 +13,4 @@ output/
 
 # Internal tooling
 .superpowers/
+/.airflow_home
