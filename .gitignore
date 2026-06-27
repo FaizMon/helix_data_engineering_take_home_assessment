@@ -7,9 +7,15 @@ __pycache__/
 .DS_Store
 output/
 
-# Dagster temp files
+# Dagster temp files (main branch)
 .tmp_dagster_home_*/
 .dagster_home/
+
+# Airflow
+.airflow_home/
+airflow.db
+airflow.cfg
+webserver_config.py
 
 # Internal tooling
 .superpowers/

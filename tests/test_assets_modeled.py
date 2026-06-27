@@ -1,19 +1,16 @@
 import os
-import tempfile
 import duckdb
 import pytest
-from dagster import materialize
-from dagster_duckdb import DuckDBResource
-from src.assets.raw import raw_loans, raw_payments
-from src.assets.staging import stg_loans, stg_payments
-from src.assets.modeled import dim_loans, dim_customers, dim_dates, fct_payments, rpt_delinquency
 
-
-@pytest.fixture
-def test_db():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test.duckdb")
-        yield db_path
+from src.tasks.raw import load_raw_loans, load_raw_payments
+from src.tasks.staging import transform_stg_loans, transform_stg_payments
+from src.tasks.modeled import (
+    build_dim_loans,
+    build_dim_customers,
+    build_dim_dates,
+    build_fct_payments,
+    build_rpt_delinquency,
+)
 
 
 @pytest.fixture
@@ -22,90 +19,61 @@ def fixtures_dir():
 
 
 @pytest.fixture
-def staged_db(test_db, fixtures_dir, monkeypatch):
-    """Materialize raw + staging so modeled tests can build on top."""
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    resources = {"duckdb": DuckDBResource(database=test_db)}
-    result = materialize(
-        [raw_loans, raw_payments, stg_loans, stg_payments],
-        resources=resources,
-    )
-    assert result.success
-    return test_db
-
-
-def test_dim_loans(staged_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    resources = {"duckdb": DuckDBResource(database=staged_db)}
-    result = materialize([dim_loans], resources=resources)
-    assert result.success
-    conn = duckdb.connect(staged_db)
-    count = conn.execute("SELECT COUNT(*) FROM dim_loans").fetchone()[0]
-    assert count == 14  # matches stg_loans after dedup
+def staged_conn(fixtures_dir):
+    conn = duckdb.connect(":memory:")
+    load_raw_loans(conn, data_dir=fixtures_dir)
+    load_raw_payments(conn, data_dir=fixtures_dir)
+    transform_stg_loans(conn)
+    transform_stg_payments(conn)
+    yield conn
     conn.close()
 
 
-def test_dim_customers(staged_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    resources = {"duckdb": DuckDBResource(database=staged_db)}
-    result = materialize([dim_customers], resources=resources)
-    assert result.success
-    conn = duckdb.connect(staged_db)
-    count = conn.execute("SELECT COUNT(*) FROM dim_customers").fetchone()[0]
-    assert count == 13  # 14 loans but C000001 appears in 2 loans → 13 unique customers
-    # C000001's latest loan is L0000001 (2023-05-03, credit_score=672)
-    row = conn.execute(
+def test_dim_loans(staged_conn):
+    build_dim_loans(staged_conn)
+    count = staged_conn.execute("SELECT COUNT(*) FROM dim_loans").fetchone()[0]
+    assert count == 14
+
+
+def test_dim_customers(staged_conn):
+    build_dim_customers(staged_conn)
+    count = staged_conn.execute("SELECT COUNT(*) FROM dim_customers").fetchone()[0]
+    assert count == 13  # 14 loans but C000001 appears in 2 loans
+    row = staged_conn.execute(
         "SELECT credit_score FROM dim_customers WHERE customer_id = 'C000001'"
     ).fetchone()
-    assert row[0] == 672  # from L0000001's borrower_info (most recent origination_date)
-    conn.close()
+    assert row[0] == 672  # from L0000001 (most recent origination_date)
 
 
-def test_dim_dates(staged_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    resources = {"duckdb": DuckDBResource(database=staged_db)}
-    result = materialize([dim_dates], resources=resources)
-    assert result.success
-    conn = duckdb.connect(staged_db)
-    count = conn.execute("SELECT COUNT(*) FROM dim_dates").fetchone()[0]
+def test_dim_dates(staged_conn):
+    build_dim_dates(staged_conn)
+    count = staged_conn.execute("SELECT COUNT(*) FROM dim_dates").fetchone()[0]
     assert count > 0
-    # Verify structure
-    row = conn.execute(
+    row = staged_conn.execute(
         "SELECT date_key, year, quarter, month, day FROM dim_dates LIMIT 1"
     ).fetchone()
     assert row is not None
-    conn.close()
 
 
-def test_fct_payments(staged_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    resources = {"duckdb": DuckDBResource(database=staged_db)}
-    result = materialize([dim_loans, dim_dates, fct_payments], resources=resources)
-    assert result.success
-    conn = duckdb.connect(staged_db)
-    count = conn.execute("SELECT COUNT(*) FROM fct_payments").fetchone()[0]
+def test_fct_payments(staged_conn):
+    build_dim_loans(staged_conn)
+    build_dim_dates(staged_conn)
+    build_fct_payments(staged_conn)
+    count = staged_conn.execute("SELECT COUNT(*) FROM fct_payments").fetchone()[0]
     assert count == 20
-    # Orphan payment (L9999999) should have NULL customer_id
-    orphan = conn.execute(
+    orphan = staged_conn.execute(
         "SELECT customer_id FROM fct_payments WHERE loan_id = 'L9999999'"
     ).fetchone()
     assert orphan[0] is None
-    conn.close()
 
 
-def test_rpt_delinquency(staged_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    resources = {"duckdb": DuckDBResource(database=staged_db)}
-    result = materialize(
-        [dim_loans, dim_dates, fct_payments, rpt_delinquency],
-        resources=resources,
-    )
-    assert result.success
-    conn = duckdb.connect(staged_db)
-    rows = conn.execute("SELECT * FROM rpt_delinquency").fetchall()
+def test_rpt_delinquency(staged_conn):
+    build_dim_loans(staged_conn)
+    build_dim_dates(staged_conn)
+    build_fct_payments(staged_conn)
+    build_rpt_delinquency(staged_conn)
+    rows = staged_conn.execute("SELECT * FROM rpt_delinquency").fetchall()
     assert len(rows) > 0
-    # Verify columns exist
-    cols = [desc[0] for desc in conn.description]
+    cols = [desc[0] for desc in staged_conn.description]
     assert "product_type" in cols
     assert "delinquency_rate_pct" in cols
-    conn.close()

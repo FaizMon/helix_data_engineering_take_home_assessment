@@ -1,17 +1,15 @@
 import os
-import tempfile
 import duckdb
 import pytest
-from dagster import materialize
-from dagster_duckdb import DuckDBResource
-from src.assets.raw import raw_loans, raw_payments
+
+from src.tasks.raw import load_raw_loans, load_raw_payments
 
 
 @pytest.fixture
-def test_db():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test.duckdb")
-        yield db_path
+def conn():
+    c = duckdb.connect(":memory:")
+    yield c
+    c.close()
 
 
 @pytest.fixture
@@ -19,27 +17,15 @@ def fixtures_dir():
     return os.path.join(os.path.dirname(__file__), "fixtures")
 
 
-def test_raw_loans_materializes(test_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    result = materialize(
-        [raw_loans],
-        resources={"duckdb": DuckDBResource(database=test_db)},
-    )
-    assert result.success
-    conn = duckdb.connect(test_db)
+def test_raw_loans(conn, fixtures_dir):
+    result = load_raw_loans(conn, data_dir=fixtures_dir)
     count = conn.execute("SELECT COUNT(*) FROM raw_loans").fetchone()[0]
-    assert count == 15  # 15 rows in fixture (including duplicate)
-    conn.close()
+    assert count == 15
+    assert result["row_count"] == 15
 
 
-def test_raw_payments_materializes(test_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    result = materialize(
-        [raw_payments],
-        resources={"duckdb": DuckDBResource(database=test_db)},
-    )
-    assert result.success
-    conn = duckdb.connect(test_db)
+def test_raw_payments(conn, fixtures_dir):
+    result = load_raw_payments(conn, data_dir=fixtures_dir)
     count = conn.execute("SELECT COUNT(*) FROM raw_payments").fetchone()[0]
     assert count == 20
-    conn.close()
+    assert result["row_count"] == 20

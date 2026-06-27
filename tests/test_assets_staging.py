@@ -1,18 +1,16 @@
 import os
-import tempfile
 import duckdb
 import pytest
-from dagster import materialize
-from dagster_duckdb import DuckDBResource
-from src.assets.raw import raw_loans, raw_payments
-from src.assets.staging import stg_loans, stg_payments
+
+from src.tasks.raw import load_raw_loans, load_raw_payments
+from src.tasks.staging import transform_stg_loans, transform_stg_payments
 
 
 @pytest.fixture
-def test_db():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test.duckdb")
-        yield db_path
+def conn():
+    c = duckdb.connect(":memory:")
+    yield c
+    c.close()
 
 
 @pytest.fixture
@@ -20,13 +18,10 @@ def fixtures_dir():
     return os.path.join(os.path.dirname(__file__), "fixtures")
 
 
-def test_stg_loans(test_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    resources = {"duckdb": DuckDBResource(database=test_db)}
-    result = materialize([raw_loans, stg_loans], resources=resources)
-    assert result.success
+def test_stg_loans(conn, fixtures_dir):
+    load_raw_loans(conn, data_dir=fixtures_dir)
+    result = transform_stg_loans(conn)
 
-    conn = duckdb.connect(test_db)
     count = conn.execute("SELECT COUNT(*) FROM stg_loans").fetchone()[0]
     assert count == 14  # 15 raw rows - 1 duplicate
 
@@ -57,16 +52,11 @@ def test_stg_loans(test_db, fixtures_dir, monkeypatch):
     ).fetchone()
     assert row[0] == 832
 
-    conn.close()
 
+def test_stg_payments(conn, fixtures_dir):
+    load_raw_payments(conn, data_dir=fixtures_dir)
+    result = transform_stg_payments(conn)
 
-def test_stg_payments(test_db, fixtures_dir, monkeypatch):
-    monkeypatch.setenv("HELIX_DATA_DIR", fixtures_dir)
-    resources = {"duckdb": DuckDBResource(database=test_db)}
-    result = materialize([raw_payments, stg_payments], resources=resources)
-    assert result.success
-
-    conn = duckdb.connect(test_db)
     count = conn.execute("SELECT COUNT(*) FROM stg_payments").fetchone()[0]
     assert count == 20  # no duplicates in fixture
 
@@ -90,5 +80,3 @@ def test_stg_payments(test_db, fixtures_dir, monkeypatch):
     ).fetchone()
     assert row[0] is None
     assert row[1] is None
-
-    conn.close()

@@ -3,9 +3,7 @@ name = "helix-data-pipeline"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "dagster>=1.9",
-    "dagster-webserver>=1.9",
-    "dagster-duckdb>=0.25",
+    "apache-airflow>=2.9",
     "duckdb>=1.0",
     "structlog>=24.0",
 ]
@@ -14,9 +12,6 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
-
-[tool.dagster]
-module_name = "src.definitions"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
