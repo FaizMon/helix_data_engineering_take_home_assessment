@@ -1,6 +1,11 @@
 import os
+import sys
 import logging
 from datetime import datetime
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 import duckdb
 from airflow.decorators import dag, task
@@ -14,7 +19,7 @@ from src.tasks.modeled import (
     build_fct_payments,
     build_rpt_delinquency,
 )
-from src.tasks.quality_checks import run_all_checks
+from src.tasks.quality_checks import run_staging_checks, check_fct_payments_referential_integrity
 
 logger = logging.getLogger(__name__)
 
@@ -44,21 +49,21 @@ def helix_pipeline():
         return result
 
     @task()
-    def ingest_payments():
+    def ingest_payments(raw_loans_result):
         conn = get_conn()
         result = load_raw_payments(conn, data_dir=DATA_DIR)
         conn.close()
         return result
 
     @task()
-    def stage_loans(raw_loans_result):
+    def stage_loans(raw_payments_result):
         conn = get_conn()
         result = transform_stg_loans(conn)
         conn.close()
         return result
 
     @task()
-    def stage_payments(raw_payments_result):
+    def stage_payments(stg_loans_result):
         conn = get_conn()
         result = transform_stg_payments(conn)
         conn.close()
@@ -67,7 +72,7 @@ def helix_pipeline():
     @task()
     def quality_checks(stg_loans_result, stg_payments_result):
         conn = get_conn()
-        result = run_all_checks(conn)
+        result = run_staging_checks(conn)
         conn.close()
         failed = [r for r in result["results"] if not r["passed"] and r.get("severity") != "WARN"]
         if failed:
@@ -108,10 +113,10 @@ def helix_pipeline():
         return result
 
     raw_loans = ingest_loans()
-    raw_payments = ingest_payments()
+    raw_payments = ingest_payments(raw_loans)
 
-    stg_loans = stage_loans(raw_loans)
-    stg_payments = stage_payments(raw_payments)
+    stg_loans = stage_loans(raw_payments)
+    stg_payments = stage_payments(stg_loans)
 
     qc = quality_checks(stg_loans, stg_payments)
 

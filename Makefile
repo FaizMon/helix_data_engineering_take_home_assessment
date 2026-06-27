@@ -6,7 +6,7 @@ export AIRFLOW_HOME
 setup:
 	python -m venv .venv
 	.venv/bin/pip install -e ".[dev]"
-	AIRFLOW_HOME=$(AIRFLOW_HOME) .venv/bin/airflow db init
+	AIRFLOW_HOME=$(AIRFLOW_HOME) .venv/bin/airflow db migrate
 	AIRFLOW_HOME=$(AIRFLOW_HOME) .venv/bin/airflow connections add 'helix_duckdb' \
 		--conn-type 'generic' \
 		--conn-extra '{"db_path": "output/helix.duckdb"}' 2>/dev/null || true

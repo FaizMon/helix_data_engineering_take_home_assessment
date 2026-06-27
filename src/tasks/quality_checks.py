@@ -16,7 +16,7 @@ def check_stg_loans_unique_ids(conn):
 
 def check_stg_loans_positive_principal(conn):
     bad = conn.execute("SELECT COUNT(*) FROM stg_loans WHERE principal_amount <= 0").fetchone()[0]
-    return {"passed": bad == 0, "non_positive_count": bad, "check": "stg_loans_positive_principal"}
+    return {"passed": bad == 0, "non_positive_count": bad, "severity": "WARN", "check": "stg_loans_positive_principal"}
 
 
 def check_stg_loans_valid_interest_rate(conn):
@@ -88,6 +88,21 @@ def check_fct_payments_referential_integrity(conn):
     }
 
 
+STAGING_CHECKS = [
+    check_stg_loans_no_null_ids,
+    check_stg_loans_unique_ids,
+    check_stg_loans_positive_principal,
+    check_stg_loans_valid_interest_rate,
+    check_stg_loans_valid_product_type,
+    check_stg_loans_freshness,
+    check_stg_loans_row_count,
+    check_stg_payments_no_null_ids,
+    check_stg_payments_unique_ids,
+    check_stg_payments_positive_amount,
+    check_stg_payments_freshness,
+    check_stg_payments_row_count,
+]
+
 ALL_CHECKS = [
     check_stg_loans_no_null_ids,
     check_stg_loans_unique_ids,
@@ -103,6 +118,17 @@ ALL_CHECKS = [
     check_stg_payments_row_count,
     check_fct_payments_referential_integrity,
 ]
+
+
+def run_staging_checks(conn):
+    results = []
+    for check_fn in STAGING_CHECKS:
+        result = check_fn(conn)
+        status = "PASS" if result["passed"] else "FAIL"
+        logger.info(f"Check {result['check']}: {status}")
+        results.append(result)
+    failed = [r for r in results if not r["passed"]]
+    return {"total": len(results), "passed": len(results) - len(failed), "failed": len(failed), "results": results}
 
 
 def run_all_checks(conn):
