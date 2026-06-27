@@ -6,3 +6,10 @@ __pycache__/
 *.egg-info/
 .DS_Store
 output/
+
+# Dagster temp files
+.tmp_dagster_home_*/
+.dagster_home/
+
+# Internal tooling
+.superpowers/
